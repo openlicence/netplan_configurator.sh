@@ -1,5 +1,3 @@
-# netplan_configurator.sh
-
 # Загрузка скрипта в файл
 wget https://raw.githubusercontent.com/openlicence/netplan_configurator.sh/refs/heads/main/netplan_configurator.sh
 
