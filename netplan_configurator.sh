@@ -163,6 +163,13 @@ else
     # Создание IPv4 конфига
     if [[ ${#ipv4_addresses[@]} -gt 0 ]]; then
         ipv4_file="/etc/netplan/99-ipv4.yaml"
+        # Форматирование адресов для YAML
+        ipv4_formatted=()
+        for ip in "${ipv4_addresses[@]}"; do
+            ipv4_formatted+=("\"$ip/24\"")
+        done
+        ipv4_string=$(IFS=,; echo "${ipv4_formatted[*]}")
+        
         cat << EOF | sudo tee $ipv4_file > /dev/null
 network:
   version: 2
@@ -170,7 +177,7 @@ network:
   ethernets:
     $interface:
       dhcp4: false
-      addresses: [$(IFS=,; echo "${ipv4_addresses[@]/%//24}")]
+      addresses: [$ipv4_string]
       routes:
         - to: 0.0.0.0/0
           via: $ipv4_gateway
@@ -183,6 +190,13 @@ EOF
     # Создание IPv6 конфига
     if [[ ${#ipv6_addresses[@]} -gt 0 && $add_ipv6 == "y" ]]; then
         ipv6_file="/etc/netplan/99-ipv6.yaml"
+        # Форматирование адресов для YAML
+        ipv6_formatted=()
+        for ip in "${ipv6_addresses[@]}"; do
+            ipv6_formatted+=("\"$ip/128\"")
+        done
+        ipv6_string=$(IFS=,; echo "${ipv6_formatted[*]}")
+        
         cat << EOF | sudo tee $ipv6_file > /dev/null
 network:
   version: 2
@@ -190,7 +204,7 @@ network:
   ethernets:
     $interface:
       dhcp6: false
-      addresses: [$(IFS=,; echo "${ipv6_addresses[@]/%//128}")]
+      addresses: [$ipv6_string]
       routes:
         - to: ::/0
           via: $ipv6_gateway
