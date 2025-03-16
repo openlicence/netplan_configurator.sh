@@ -34,12 +34,7 @@ function get_gateway() {
         octets[3]=1
         echo "${octets[0]}.${octets[1]}.${octets[2]}.${octets[3]}"
     elif is_valid_ipv6 "$ip"; then
-        if [[ $ip == *"::"* ]]; then
-            echo "Ошибка: IPv6 адрес с :: не поддерживается для автоматического определения шлюза"
-            exit 1
-        fi
         IFS=':' read -ra hextets <<< "$ip"
-        last_hextet=$(printf "%x" $((0x${hextets[-1]} & 0xfffe)))
         hextets[-1]="1"
         echo "$(IFS=:; echo "${hextets[*]}")"
     else
@@ -54,34 +49,47 @@ read -p "Настройка временная (1) или постоянная (
 # Запрос интерфейса
 read -p "Введите имя интерфейса (например, eth0): " interface
 
-# Ввод основного IP
-read -p "Введите основной IP-адрес: " main_ip
+# Инициализация массивов
+ipv4_addresses=()
+ipv6_addresses=()
+ipv4_gateway=""
+ipv6_gateway=""
 
-# Определение типа IP и маски
-if is_valid_ipv4 "$main_ip"; then
-    mask="/24"
-    gateway=$(get_gateway "$main_ip")
-elif is_valid_ipv6 "$main_ip"; then
-    mask="/128"
-    gateway=$(get_gateway "$main_ip")
-else
-    echo "Неверный IP-адрес"
-    exit 1
-fi
+# Ввод основного IP
+while true; do
+    read -p "Введите основной IP-адрес: " main_ip
+    if is_valid_ipv4 "$main_ip"; then
+        ipv4_addresses+=("$main_ip/24")
+        ipv4_gateway=$(get_gateway "$main_ip")
+        break
+    elif is_valid_ipv6 "$main_ip"; then
+        ipv6_addresses+=("$main_ip/128")
+        ipv6_gateway=$(get_gateway "$main_ip")
+        break
+    else
+        echo "Неверный формат IP, попробуйте снова"
+    fi
+done
 
 # Дополнительные IP
-additional_ips=()
 while true; do
     read -p "Добавить дополнительный IP? (y/n): " add_more
-    if [[ $add_more != "y" ]]; then
-        break
-    fi
-    read -p "Введите дополнительный IP: " ip
-    if is_valid_ipv4 "$ip" || is_valid_ipv6 "$ip"; then
-        additional_ips+=("$ip")
-    else
-        echo "Неверный IP, пропускаем"
-    fi
+    [[ $add_more != "y" ]] && break
+    
+    while true; do
+        read -p "Введите дополнительный IP: " ip
+        if is_valid_ipv4 "$ip"; then
+            ipv4_addresses+=("$ip/24")
+            [[ -z "$ipv4_gateway" ]] && ipv4_gateway=$(get_gateway "$ip")
+            break
+        elif is_valid_ipv6 "$ip"; then
+            ipv6_addresses+=("$ip/128")
+            [[ -z "$ipv6_gateway" ]] && ipv6_gateway=$(get_gateway "$ip")
+            break
+        else
+            echo "Неверный формат IP, попробуйте снова"
+        fi
+    done
 done
 
 # DNS-серверы
@@ -92,9 +100,7 @@ if [[ $use_default_dns == "n" ]]; then
     echo "Введите DNS-серверы (завершите пустой строкой):"
     while true; do
         read dns_entry
-        if [[ -z $dns_entry ]]; then
-            break
-        fi
+        [[ -z $dns_entry ]] && break
         dns+=("$dns_entry")
     done
 fi
@@ -102,73 +108,73 @@ fi
 # Временная настройка
 if [[ $config_type == "1" ]]; then
     echo "Применение временных настроек..."
-    ip addr add "$main_ip$mask" dev $interface
-    for ip in "${additional_ips[@]}"; do
-        if is_valid_ipv4 "$ip"; then
-            ip addr add "$ip/24" dev $interface
-        else
-            ip addr add "$ip/128" dev $interface
-        fi
+    # Добавление IPv4 адресов
+    for ip in "${ipv4_addresses[@]}"; do
+        sudo ip addr add "$ip" dev $interface
     done
-    current_gateway=$(ip route show default | awk '/default/ {print $3}')
-    if [[ -z $current_gateway ]]; then
-        ip route add default via $gateway dev $interface
+    
+    # Добавление IPv6 адресов
+    for ip in "${ipv6_addresses[@]}"; do
+        sudo ip addr add "$ip" dev $interface
+    done
+    
+    # Настройка маршрутов
+    if [[ -n "$ipv4_gateway" ]]; then
+        sudo ip route replace default via $ipv4_gateway dev $interface
     fi
+    if [[ -n "$ipv6_gateway" ]]; then
+        sudo ip -6 route replace default via $ipv6_gateway dev $interface
+    fi
+    
     echo "Временные настройки применены"
 
 # Постоянная настройка для Ubuntu
 else
     echo "Применение постоянных настроек для Ubuntu..."
-    ipv4_ips=()
-    ipv6_ips=()
-    for ip in "$main_ip" "${additional_ips[@]}"; do
-        if is_valid_ipv4 "$ip"; then
-            ipv4_ips+=("$ip/24")
-        else
-            ipv6_ips+=("$ip/128")
-        fi
-    done
-
+    
     # Создание IPv4 конфига
-    ipv4_file="/etc/netplan/99-ipv4.yaml"
-    cat << EOF | sudo tee $ipv4_file > /dev/null
+    if [[ ${#ipv4_addresses[@]} -gt 0 ]]; then
+        ipv4_file="/etc/netplan/99-ipv4.yaml"
+        cat << EOF | sudo tee $ipv4_file > /dev/null
 network:
   version: 2
   renderer: networkd
   ethernets:
     $interface:
       dhcp4: false
-      addresses: [$(IFS=,; echo "${ipv4_ips[*]}")]
+      addresses: [$(IFS=,; echo "${ipv4_addresses[*]}")]
       routes:
         - to: 0.0.0.0/0
-          via: $gateway
+          via: $ipv4_gateway
       nameservers:
-        addresses: [$(IFS=,; echo "${dns[*]}")]
+        addresses: [$(IFS=,; echo "${dns[@]}")]
 EOF
-    sudo chmod 600 $ipv4_file
-
+        sudo chmod 600 $ipv4_file
+    fi
+    
     # Создание IPv6 конфига
-    ipv6_gateway=$(get_gateway "$main_ip")
-    ipv6_file="/etc/netplan/99-ipv6.yaml"
-    cat << EOF | sudo tee $ipv6_file > /dev/null
+    if [[ ${#ipv6_addresses[@]} -gt 0 ]]; then
+        ipv6_file="/etc/netplan/99-ipv6.yaml"
+        cat << EOF | sudo tee $ipv6_file > /dev/null
 network:
   version: 2
   renderer: networkd
   ethernets:
     $interface:
       dhcp6: false
-      addresses: [$(IFS=,; echo "${ipv6_ips[*]}")]
+      addresses: [$(IFS=,; echo "${ipv6_addresses[*]}")]
       routes:
         - to: ::/0
           via: $ipv6_gateway
       nameservers:
-        addresses: [$(IFS=,; echo "${dns[*]}")]
+        addresses: [$(IFS=,; echo "${dns[@]}")]
 EOF
-    sudo chmod 600 $ipv6_file
-
-    # Отключение старых конфигов
+        sudo chmod 600 $ipv6_file
+    fi
+    
+    # Резервирование старых конфигов
     sudo mv /etc/netplan/50-cloud-init.yaml /etc/netplan/50-cloud-init.yaml.backup 2>/dev/null
-
+    
     # Применение настроек
     sudo netplan apply
     echo "Настройки применены. Рекомендуется перезагрузить сервер."
