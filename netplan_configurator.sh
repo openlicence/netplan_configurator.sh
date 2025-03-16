@@ -71,63 +71,50 @@ if ! ip link show "$interface" &> /dev/null; then
     exit 1
 fi
 
-# Инициализация массивов
-ipv4_addresses=()
-ipv6_addresses=()
-ipv4_gateway=""
-ipv6_gateway=""
-
-# Ввод основного IP
+# Ввод IPv4 адресов
 while true; do
-    read -p "Введите основной IPv4-адрес: " main_ip
-    if is_valid_ipv4 "$main_ip"; then
-        ipv4_addresses+=("$main_ip/24")
-        ipv4_gateway=$(get_gateway "$main_ip")
+    read -p "Введите IPv4 адреса через пробел (первый будет основным): " ipv4_input
+    ipv4_addresses=($ipv4_input)
+    valid=true
+    for ip in "${ipv4_addresses[@]}"; do
+        if ! is_valid_ipv4 "$ip"; then
+            echo "Неверный формат IPv4: $ip"
+            valid=false
+            break
+        fi
+    done
+    if $valid; then
         break
-    else
-        echo "Неверный формат IPv4, попробуйте снова"
     fi
 done
 
-# Выбор добавления IPv6
+# Основной IPv4 и шлюз
+main_ipv4=${ipv4_addresses[0]}
+ipv4_gateway=$(get_gateway "$main_ipv4")
+
+# Ввод IPv6 адресов (опционально)
 read -p "Добавить IPv6 адреса? (y/n): " add_ipv6
 if [[ $add_ipv6 == "y" ]]; then
     while true; do
-        read -p "Введите основной IPv6-адрес: " main_ipv6
-        if is_valid_ipv6 "$main_ipv6"; then
-            ipv6_addresses+=("$main_ipv6/128")
-            ipv6_gateway=$(get_gateway "$main_ipv6")
-            break
-        else
-            echo "Неверный формат IPv6, попробуйте снова"
-        fi
-    done
-fi
-
-# Дополнительные IP
-while true; do
-    read -p "Добавить дополнительный IP? (y/n): " add_more
-    [[ $add_more != "y" ]] && break
-    
-    while true; do
-        read -p "Введите дополнительный IP (IPv4 или IPv6): " ip
-        if is_valid_ipv4 "$ip"; then
-            ipv4_addresses+=("$ip/24")
-            [[ -z "$ipv4_gateway" ]] && ipv4_gateway=$(get_gateway "$ip")
-            break
-        elif is_valid_ipv6 "$ip"; then
-            if [[ $add_ipv6 == "y" ]]; then
-                ipv6_addresses+=("$ip/128")
-                [[ -z "$ipv6_gateway" ]] && ipv6_gateway=$(get_gateway "$ip")
+        read -p "Введите IPv6 адреса через пробел (первый будет основным): " ipv6_input
+        ipv6_addresses=($ipv6_input)
+        valid=true
+        for ip in "${ipv6_addresses[@]}"; do
+            if ! is_valid_ipv6 "$ip"; then
+                echo "Неверный формат IPv6: $ip"
+                valid=false
                 break
-            else
-                echo "IPv6 отключён, введите IPv4"
             fi
-        else
-            echo "Неверный формат IP, попробуйте снова"
+        done
+        if $valid; then
+            break
         fi
     done
-done
+
+    # Основной IPv6 и шлюз
+    main_ipv6=${ipv6_addresses[0]}
+    ipv6_gateway=$(get_gateway "$main_ipv6")
+fi
 
 # DNS-серверы
 dns=()
@@ -149,13 +136,13 @@ if [[ $config_type == "1" ]]; then
     echo "Применение временных настроек..."
     # Добавление IPv4 адресов
     for ip in "${ipv4_addresses[@]}"; do
-        sudo ip addr add "$ip" dev $interface
+        sudo ip addr add "$ip/24" dev $interface
     done
     
     # Добавление IPv6 адресов
     if [[ $add_ipv6 == "y" ]]; then
         for ip in "${ipv6_addresses[@]}"; do
-            sudo ip addr add "$ip" dev $interface
+            sudo ip addr add "$ip/128" dev $interface
         done
     fi
     
@@ -183,7 +170,7 @@ network:
   ethernets:
     $interface:
       dhcp4: false
-      addresses: [$(IFS=,; echo "${ipv4_addresses[*]}")]
+      addresses: [$(IFS=,; echo "${ipv4_addresses[@]/%//24}")]
       routes:
         - to: 0.0.0.0/0
           via: $ipv4_gateway
@@ -203,7 +190,7 @@ network:
   ethernets:
     $interface:
       dhcp6: false
-      addresses: [$(IFS=,; echo "${ipv6_addresses[*]}")]
+      addresses: [$(IFS=,; echo "${ipv6_addresses[@]/%//128}")]
       routes:
         - to: ::/0
           via: $ipv6_gateway
