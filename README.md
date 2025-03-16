@@ -7,4 +7,5 @@ chmod +x netplan_configurator.sh
 
 # Запуск скрипта
 ./netplan_configurator.sh
+
 ```
