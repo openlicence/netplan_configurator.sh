@@ -1,0 +1,1 @@
+# netplan_configurator.sh
