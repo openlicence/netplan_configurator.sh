@@ -43,6 +43,15 @@ function get_gateway() {
     fi
 }
 
+# Форматирование DNS для YAML
+function format_dns() {
+    local formatted=()
+    for addr in "$@"; do
+        formatted+=("\"$addr\"")
+    done
+    echo "${formatted[*]}" | sed 's/ /, /g'
+}
+
 # Запрос типа настройки
 read -p "Настройка временная (1) или постоянная (2)? Введите 1 или 2: " config_type
 
@@ -93,10 +102,11 @@ while true; do
 done
 
 # DNS-серверы
-dns=("1.1.1.1" "1.0.0.1" "2606:4700:4700::1111" "2606:4700:4700::1001")
+dns=()
 read -p "Использовать DNS по умолчанию (Cloudflare)? (y/n): " use_default_dns
-if [[ $use_default_dns == "n" ]]; then
-    dns=()
+if [[ $use_default_dns == "y" ]]; then
+    dns=("1.1.1.1" "1.0.0.1" "2606:4700:4700::1111" "2606:4700:4700::1001")
+else
     echo "Введите DNS-серверы (завершите пустой строкой):"
     while true; do
         read dns_entry
@@ -104,6 +114,7 @@ if [[ $use_default_dns == "n" ]]; then
         dns+=("$dns_entry")
     done
 fi
+dns_string=$(format_dns "${dns[@]}")
 
 # Временная настройка
 if [[ $config_type == "1" ]]; then
@@ -147,7 +158,7 @@ network:
         - to: 0.0.0.0/0
           via: $ipv4_gateway
       nameservers:
-        addresses: [$(IFS=,; echo "${dns[@]}")]
+        addresses: [$dns_string]
 EOF
         sudo chmod 600 $ipv4_file
     fi
@@ -167,7 +178,7 @@ network:
         - to: ::/0
           via: $ipv6_gateway
       nameservers:
-        addresses: [$(IFS=,; echo "${dns[@]}")]
+        addresses: [$dns_string]
 EOF
         sudo chmod 600 $ipv6_file
     fi
